@@ -24,5 +24,6 @@ dist-ssr
 *.sw?
 
 project-spec.md
+axl.md
 
 node_modules

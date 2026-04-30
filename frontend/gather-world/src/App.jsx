@@ -1,120 +1,211 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
+function shortPeerId(peerId) {
+  if (!peerId) return '…'
+  const s = String(peerId)
+  return s.length <= 14 ? s : `${s.slice(0, 6)}…${s.slice(-6)}`
+}
+
 function App() {
-  const [count, setCount] = useState(0)
+  const [from, setFrom] = useState('A')
+  const [text, setText] = useState('')
+  const [messages, setMessages] = useState([])
+  const [status, setStatus] = useState('connecting')
+  const [peers, setPeers] = useState({ A: null, B: null })
+  const leftRef = useRef(null)
+  const rightRef = useRef(null)
+  const seenIdsRef = useRef(new Set())
+
+  const to = useMemo(() => (from === 'A' ? 'B' : 'A'), [from])
+  const sorted = useMemo(() => {
+    const copy = messages.slice()
+    copy.sort((a, b) => (a?.ts || 0) - (b?.ts || 0))
+    return copy
+  }, [messages])
+
+  useEffect(() => {
+    let cancelled = false
+
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return
+        setPeers({
+          A: data?.axl?.A?.peerId || null,
+          B: data?.axl?.B?.peerId || null,
+        })
+      })
+      .catch(() => {
+        // ignore
+      })
+
+    fetch('/api/messages')
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return
+        const incoming = Array.isArray(data?.messages) ? data.messages : []
+        const deduped = []
+        for (const m of incoming) {
+          if (!m?.id) continue
+          if (seenIdsRef.current.has(m.id)) continue
+          seenIdsRef.current.add(m.id)
+          deduped.push(m)
+        }
+        setMessages(deduped)
+      })
+      .catch(() => {
+        // ignore
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    const es = new EventSource('/api/events')
+    es.addEventListener('ready', () => setStatus('connected'))
+    es.addEventListener('message', (evt) => {
+      try {
+        const msg = JSON.parse(evt.data)
+        if (!msg?.id) return
+        if (seenIdsRef.current.has(msg.id)) return
+        seenIdsRef.current.add(msg.id)
+        setMessages((prev) => prev.concat(msg))
+      } catch {
+        // ignore
+      }
+    })
+    es.onerror = () => setStatus('reconnecting')
+
+    return () => es.close()
+  }, [])
+
+  useEffect(() => {
+    const l = leftRef.current
+    if (l) l.scrollTop = l.scrollHeight
+    const r = rightRef.current
+    if (r) r.scrollTop = r.scrollHeight
+  }, [sorted.length])
+
+  async function send() {
+    const body = { from, text }
+    const t = text.trim()
+    if (!t) return
+    setText('')
+    try {
+      const res = await fetch('/api/sendMessage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        alert(err?.error || 'Send failed')
+      }
+    } catch {
+      alert('Send failed')
+    }
+  }
 
   return (
     <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+      <div className="chatShell">
+        <header className="chatHeader">
+          <div className="title">
+            <h1>AXL Chat</h1>
+            <p>
+              {status === 'connected' ? 'Connected' : 'Connecting…'} • sending{' '}
+              <strong>{from}</strong> → <strong>{to}</strong>
+            </p>
+          </div>
 
-      <div className="ticks"></div>
+          <div className="controls">
+            <label className="select">
+              Send as
+              <select value={from} onChange={(e) => setFrom(e.target.value)}>
+                <option value="A">A (api_port 9002)</option>
+                <option value="B">B (api_port 9012)</option>
+              </select>
+            </label>
+          </div>
+        </header>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+        <main className="chatMain">
+          <section className="pane">
+            <div className="paneHeader">
+              <div className="paneTitle">Node A</div>
+              <div className="paneSub">{shortPeerId(peers.A)}</div>
+            </div>
+            <div className="paneBody" ref={leftRef}>
+              {sorted.length === 0 ? (
+                <div className="empty">No messages yet.</div>
+              ) : (
+                sorted.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`msg ${m?.from === 'A' ? 'outgoing' : 'incoming'}`}
+                  >
+                    <div className="meta">
+                      <span className="who">
+                        {m.from} → {m.to}
+                      </span>
+                      <span className="time">
+                        {new Date(m.ts).toLocaleTimeString()}
+                      </span>
+                    </div>
+                    <div className="bubble">{m.text}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
+          <section className="pane">
+            <div className="paneHeader">
+              <div className="paneTitle">Node B</div>
+              <div className="paneSub">{shortPeerId(peers.B)}</div>
+            </div>
+            <div className="paneBody" ref={rightRef}>
+              {sorted.length === 0 ? (
+                <div className="empty">No messages yet.</div>
+              ) : (
+                sorted.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`msg ${m?.from === 'B' ? 'outgoing' : 'incoming'}`}
+                  >
+                    <div className="meta">
+                      <span className="who">
+                        {m.from} → {m.to}
+                      </span>
+                      <span className="time">
+                        {new Date(m.ts).toLocaleTimeString()}
+                      </span>
+                    </div>
+                    <div className="bubble">{m.text}</div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        </main>
+
+        <footer className="chatFooter">
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') send()
+            }}
+            placeholder="Type a message…"
+          />
+          <button type="button" onClick={send}>
+            Send
+          </button>
+        </footer>
+      </div>
     </>
   )
 }
