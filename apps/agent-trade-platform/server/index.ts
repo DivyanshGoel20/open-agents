@@ -6,9 +6,12 @@ import { appendMessage, listMessages } from './store.js';
 import * as axl from './axl.js';
 import { inferenceRoutingDebug, routerChatConfigured, routerModelDisplay, runZeroGChat } from './ogChat.js';
 import { uniswapQuote } from './tradingApi.js';
+import { buildQuoteFromNaturalLanguage } from './quoteNl.js';
+import { loadTokenRegistry } from './tokenRegistry.js';
+import { getLastUniswapTrace } from './tradingApi.js';
 import { privateKeyToAccount } from 'viem/accounts';
 import { createPublicClient, formatUnits, http, isAddress } from 'viem';
-import { baseSepolia } from 'viem/chains';
+import { base, baseSepolia } from 'viem/chains';
 import { extractQuoteIntent } from './swapParse.js';
 import { agentPrivateKeyHex, agentZeroGProviderAddress, isValidAgentPrivateKey } from './agentKeys.js';
 import type { AgentSide } from './agentKeys.js';
@@ -229,6 +232,15 @@ type AutoRelayJob = {
   cueLine: string;
 };
 
+function looksLikeQuoteRequest(text: string): boolean {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  // Heuristic: amount + token + (to/for/in/into/arrow) + token
+  return /([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z0-9]{2,12}|0x[a-fA-F0-9]{40})\s*(to|for|in|into|->|→)\s*([A-Za-z0-9]{2,12}|0x[a-fA-F0-9]{40})/i.test(
+    t,
+  );
+}
+
 async function runAutoRelayJobs(jobs: AutoRelayJob[]): Promise<void> {
   if (!AXL_AUTO_REPLY || DEMO || !jobs.length) return;
 
@@ -236,23 +248,34 @@ async function runAutoRelayJobs(jobs: AutoRelayJob[]): Promise<void> {
     if (handledAutoRelayIds.has(job.dedupeRelayId)) continue;
 
     const respName = job.responder === 'alice' ? 'Alice' : 'Bob';
-    const composed = await composeAutoRelayAnswer(job.responder, job.cueLine);
-    if (!composed.ok) {
-      appendMessage({
-        channel: 'system',
-        direction: 'out',
-        fromKey: 'system',
-        toKey: 'ui',
-        payload: {
-          speaker: 'system',
-          text: `Auto-relay (0G) failed as ${respName}: ${composed.error}`,
-        },
-        rawPreview: composed.error.slice(0, 4000),
-        source: 'system',
-      });
 
-      handledAutoRelayIds.add(job.dedupeRelayId);
-      continue;
+    // Prefer a real Uniswap quote when the inbound message is a quote request.
+    // This prevents the LLM from replying with placeholders like "[current conversion rate]".
+    const quoted = job.cueLine.match(/"([\s\S]{1,4000})"\s*$/)?.[1]?.trim() ?? '';
+    const maybeQuoteText = quoted || job.cueLine;
+    const shouldAttemptQuote = Boolean(process.env.UNISWAP_API_KEY) && looksLikeQuoteRequest(maybeQuoteText);
+
+    let replyText: string | null = null;
+    if (shouldAttemptQuote) {
+      try {
+        const swapper = quoteSwapperAddress(job.responder);
+        const built = buildQuoteFromNaturalLanguage({ text: maybeQuoteText, swapper });
+        if (!built.ok) {
+          replyText = `Quote parse failed: ${built.error}`;
+        } else {
+          const q = await uniswapQuote(built.tradingApiBody);
+          if (!q.ok) throw new Error(q.error);
+          const quoteFetched = q.quote as Record<string, unknown>;
+          const pretty = await formatQuotePretty(
+            { tokenIn: built.intent.tokenIn, tokenOut: built.intent.tokenOut, amount: built.intent.amount, chainId: built.intent.chainId },
+            quoteFetched,
+          );
+          const factual = `Quote (chainId ${built.intent.chainId}): ${pretty}`;
+          replyText = await humanizeQuoteLine(job.responder, factual);
+        }
+      } catch (e) {
+        replyText = `Quote failed (${respName}): ${e instanceof Error ? e.message : String(e)}`;
+      }
     }
 
     const peerSide: AgentSide = job.responder === 'alice' ? 'bob' : 'alice';
@@ -260,9 +283,30 @@ async function runAutoRelayJobs(jobs: AutoRelayJob[]): Promise<void> {
     const selfKey = keyFor(job.responder);
     const destKey = keyFor(peerSide);
 
-    const replyText =
-      composed.text.replace(/\bSWAP_JSON\s*:.*$/gim, '').trim() ||
-      '[empty model reply after stripping intents]';
+    if (!replyText) {
+      const composed = await composeAutoRelayAnswer(job.responder, job.cueLine);
+      if (!composed.ok) {
+        appendMessage({
+          channel: 'system',
+          direction: 'out',
+          fromKey: 'system',
+          toKey: 'ui',
+          payload: {
+            speaker: 'system',
+            text: `Auto-relay (0G) failed as ${respName}: ${composed.error}`,
+          },
+          rawPreview: composed.error.slice(0, 4000),
+          source: 'system',
+        });
+
+        handledAutoRelayIds.add(job.dedupeRelayId);
+        continue;
+      }
+
+      replyText =
+        composed.text.replace(/\bSWAP_JSON\s*:.*$/gim, '').trim() ||
+        '[empty model reply after stripping intents]';
+    }
 
     const replySid = newAxlEnvelopeSid();
     registerPendingAxlMirrorSid(replySid);
@@ -352,7 +396,7 @@ app.get('/api/config', async (_req, res) => {
       (isValidAgentPrivateKey('bob') && Boolean(agentZeroGProviderAddress('bob'))),
     uniswapTradingApi: Boolean(process.env.UNISWAP_API_KEY),
     axlAutoReply: !DEMO && AXL_AUTO_REPLY,
-    chains: ['Base Sepolia 84532'],
+    chains: ['Base 8453', 'Base Sepolia 84532'],
   });
 });
 
@@ -529,6 +573,43 @@ app.post('/api/uniswap/quote', async (req, res) => {
   void res.json(result.quote);
 });
 
+app.get('/api/tokens', (_req, res) => {
+  void res.json({ registry: loadTokenRegistry() });
+});
+
+app.get('/api/debug/uniswap/last', (_req, res) => {
+  void res.json({ last: getLastUniswapTrace() });
+});
+
+app.post('/api/uniswap/quote_nl', async (req, res) => {
+  const text = typeof req.body?.text === 'string' ? req.body.text : '';
+  const chainId = typeof req.body?.chainId === 'number' ? req.body.chainId : undefined;
+  const slippageTolerance =
+    typeof req.body?.slippageTolerance === 'number' && Number.isFinite(req.body.slippageTolerance)
+      ? req.body.slippageTolerance
+      : undefined;
+  const routingPreference = typeof req.body?.routingPreference === 'string' ? req.body.routingPreference : undefined;
+  const swapper = typeof req.body?.swapper === 'string' ? req.body.swapper : undefined;
+
+  const built = buildQuoteFromNaturalLanguage({ text, chainId, slippageTolerance, routingPreference, swapper });
+  if (!built.ok) {
+    void res.status(400).json(built);
+    return;
+  }
+
+  const result = await uniswapQuote(built.tradingApiBody);
+  if (!result.ok) {
+    void res.status(result.error.startsWith('UNISWAP') ? 503 : 400).json(result);
+    return;
+  }
+
+  void res.json({
+    ok: true,
+    intent: built.intent,
+    quote: result.quote,
+  });
+});
+
 app.post('/api/demo/ping', (_req, res) => {
   const aKey = syntheticKey('alice');
   const bKey = syntheticKey('bob');
@@ -648,11 +729,30 @@ const erc20MetaAbi = [
   },
 ] as const;
 
-function baseSepoliaRpcUrl(): string {
+function rpcUrlForTokenMeta(chainId: number): string {
+  if (chainId === 8453) return process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+  if (chainId === 84532) return process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
   return process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org';
 }
 
-async function tokenMetaBaseSepolia(addr: string): Promise<TokenMeta> {
+function metaChainFor(chainId: number) {
+  if (chainId === 8453) return base;
+  return baseSepolia;
+}
+
+function tokenMetaFromRegistry(chainId: number, addr: string): TokenMeta | null {
+  const norm = addr.trim().toLowerCase();
+  if (!norm) return null;
+  if (norm === ETH_ADDR.toLowerCase()) return { address: ETH_ADDR, symbol: 'ETH', decimals: 18 };
+  const reg = loadTokenRegistry();
+  const list = reg[chainId] ?? [];
+  for (const t of list) {
+    if (t.address.toLowerCase() === norm) return { address: t.address, symbol: t.symbol, decimals: t.decimals };
+  }
+  return null;
+}
+
+async function tokenMetaForChain(chainId: number, addr: string): Promise<TokenMeta> {
   const norm = String(addr || '').trim();
   if (!isAddress(norm)) throw new Error(`invalid token address: ${norm}`);
   const key = norm.toLowerCase();
@@ -660,12 +760,17 @@ async function tokenMetaBaseSepolia(addr: string): Promise<TokenMeta> {
     return { address: ETH_ADDR, symbol: 'ETH', decimals: 18 };
   }
 
-  let p = tokenMetaCache.get(key);
+  // Prefer registry (no RPC calls, avoids wrong-network lookups).
+  const fromReg = tokenMetaFromRegistry(chainId, norm);
+  if (fromReg) return fromReg;
+
+  const cacheKey = `${chainId}:${key}`;
+  let p = tokenMetaCache.get(cacheKey);
   if (!p) {
     p = (async () => {
       const client = createPublicClient({
-        chain: baseSepolia,
-        transport: http(baseSepoliaRpcUrl()),
+        chain: metaChainFor(chainId),
+        transport: http(rpcUrlForTokenMeta(chainId)),
       });
 
       const [symbol, decimals] = await Promise.all([
@@ -677,7 +782,7 @@ async function tokenMetaBaseSepolia(addr: string): Promise<TokenMeta> {
       const dec = typeof decimals === 'number' && Number.isFinite(decimals) ? decimals : Number(decimals);
       return { address: norm as `0x${string}`, symbol: sym, decimals: Number.isFinite(dec) ? dec : 18 };
     })();
-    tokenMetaCache.set(key, p);
+    tokenMetaCache.set(cacheKey, p);
   }
   return p;
 }
@@ -722,12 +827,36 @@ function formatQuoteSummary(q: Record<string, unknown>): string {
   return JSON.stringify(out).slice(0, 900);
 }
 
-async function formatQuotePretty(intent: { tokenIn: string; tokenOut: string; amount: string }, q: Record<string, unknown>) {
-  const amountOutRaw =
+async function formatQuotePretty(
+  intent: { tokenIn: string; tokenOut: string; amount: string; chainId?: number },
+  q: Record<string, unknown>,
+) {
+  // Trading API quote shapes:
+  // - CLASSIC: { routing:"CLASSIC", quote:{ output:{ amount:"..." }, ... } }
+  // - UniswapX: { routing:"DUTCH_V2"|..., quote:{ orderInfo:{ outputs:[{ startAmount:"..." }] } } }
+  const routing = typeof q.routing === 'string' ? q.routing : '';
+  const quoteObj = (q as { quote?: unknown }).quote;
+
+  let amountOutRaw: bigint | null =
     parseBigintLoose(q.amountOut) ??
-    parseBigintLoose(q.quote) ??
     parseBigintLoose((q as { outputAmount?: unknown }).outputAmount) ??
     null;
+
+  if (amountOutRaw === null && quoteObj && typeof quoteObj === 'object') {
+    const qo = quoteObj as Record<string, unknown>;
+    if (routing === 'CLASSIC' || routing === 'WRAP' || routing === 'UNWRAP' || !routing) {
+      const out = qo.output as Record<string, unknown> | undefined;
+      amountOutRaw = parseBigintLoose(out?.amount);
+    } else if (routing === 'DUTCH_V2' || routing === 'DUTCH_V3' || routing === 'PRIORITY') {
+      const oi = qo.orderInfo as Record<string, unknown> | undefined;
+      const outs = (oi?.outputs as unknown) ?? [];
+      if (Array.isArray(outs) && outs.length > 0 && outs[0] && typeof outs[0] === 'object') {
+        const first = outs[0] as Record<string, unknown>;
+        // best-case fill amount for UniswapX
+        amountOutRaw = parseBigintLoose(first.startAmount) ?? parseBigintLoose(first.endAmount);
+      }
+    }
+  }
 
   const gasRaw =
     parseBigintLoose(q.estimatedGasUsed) ??
@@ -735,21 +864,45 @@ async function formatQuotePretty(intent: { tokenIn: string; tokenOut: string; am
     parseBigintLoose((q as { gasEstimate?: unknown }).gasEstimate) ??
     null;
 
-  const [tin, tout] = await Promise.all([tokenMetaBaseSepolia(intent.tokenIn), tokenMetaBaseSepolia(intent.tokenOut)]);
+  const chainId = typeof intent.chainId === 'number' ? intent.chainId : 84532;
+  const [tin, tout] = await Promise.all([tokenMetaForChain(chainId, intent.tokenIn), tokenMetaForChain(chainId, intent.tokenOut)]);
   const amountInBig = parseBigintLoose(intent.amount) ?? BigInt(0);
   const amountIn = `${formatAmt(amountInBig, tin.decimals)} ${tin.symbol}`;
   const amountOut = amountOutRaw ? `${formatAmt(amountOutRaw, tout.decimals)} ${tout.symbol}` : null;
 
-  const routing = typeof q.routing === 'string' && q.routing.trim().length ? q.routing.trim() : null;
+  const routingLabel = typeof q.routing === 'string' && q.routing.trim().length ? q.routing.trim() : null;
 
   const metaParts: string[] = [];
-  if (routing) metaParts.push(`routing ${routing}`);
+  if (routingLabel) metaParts.push(`routing ${routingLabel}`);
   if (gasRaw) metaParts.push(`est gas ${gasRaw.toString()}`);
 
   if (amountOut) {
     return `${amountIn} → ${amountOut}${metaParts.length ? ` · ${metaParts.join(' · ')}` : ''}`;
   }
   return `${amountIn} → (see raw quote)${metaParts.length ? ` · ${metaParts.join(' · ')}` : ''}`;
+}
+
+async function humanizeQuoteLine(agent: AgentSide, factualLine: string): Promise<string> {
+  const line = factualLine.trim();
+  if (!line) return line;
+
+  const system =
+    `You rewrite a factual Uniswap quote into a friendly one-liner.\n` +
+    `Rules:\n` +
+    `- You MUST keep the entire original line verbatim somewhere in your output.\n` +
+    `- You MAY add short context before/after it, but DO NOT change any numbers or tokens.\n` +
+    `- DO NOT add placeholders like "[...]" or "approximately".\n` +
+    `- Output ONE line only. No JSON. No markdown.\n`;
+
+  const rg = await runZeroGChat(agent, [
+    { role: 'system', content: system },
+    { role: 'user', content: `Make this sound more natural:\n${line}` },
+  ]);
+  if (!rg.ok) return line;
+
+  const out = rg.answer.trim().replace(/\s+/g, ' ');
+  if (!out.includes(line)) return line;
+  return out;
 }
 
 app.post('/api/agent/reply', async (req, res) => {
@@ -768,7 +921,53 @@ app.post('/api/agent/reply', async (req, res) => {
 
   let outboundSid: string | undefined;
   try {
-    const composed = await composeAgentReply(agent, cue);
+    // If the user cue itself looks like a quote request, fetch a Trading API quote directly
+    // (no QUOTE_JSON dance, and avoids the LLM fabricating placeholders).
+    let directQuote:
+      | { publicText: string; quoteFetched?: Record<string, unknown>; quoteError?: string; zeroGOk: boolean; inferenceVia?: 'router' | 'broker' }
+      | null = null;
+    if (cue && process.env.UNISWAP_API_KEY && looksLikeQuoteRequest(cue)) {
+      try {
+        const swapper = quoteSwapperAddress(agent);
+        const built = buildQuoteFromNaturalLanguage({ text: cue, swapper });
+        if (!built.ok) {
+          directQuote = {
+            publicText: `Quote parse failed: ${built.error}`,
+            quoteFetched: undefined,
+            quoteError: built.error,
+            zeroGOk: true,
+            inferenceVia: undefined,
+          };
+        } else {
+          const q = await uniswapQuote(built.tradingApiBody);
+          if (!q.ok) throw new Error(q.error);
+          const quoteFetched = q.quote as Record<string, unknown>;
+          const pretty = await formatQuotePretty(
+            { tokenIn: built.intent.tokenIn, tokenOut: built.intent.tokenOut, amount: built.intent.amount, chainId: built.intent.chainId },
+            quoteFetched,
+          );
+          const factual = `Quote (chainId ${built.intent.chainId}): ${pretty}`;
+          const human = await humanizeQuoteLine(agent, factual);
+          directQuote = {
+            publicText: human,
+            quoteFetched,
+            quoteError: undefined,
+            zeroGOk: true,
+            inferenceVia: undefined,
+          };
+        }
+      } catch (e) {
+        directQuote = {
+          publicText: '',
+          quoteFetched: undefined,
+          quoteError: e instanceof Error ? e.message : String(e),
+          zeroGOk: true,
+          inferenceVia: undefined,
+        };
+      }
+    }
+
+    const composed = directQuote ? { text: directQuote.publicText, zeroGOk: directQuote.zeroGOk, inferenceVia: directQuote.inferenceVia } : await composeAgentReply(agent, cue);
 
     const quotePayload = extractQuoteIntent(composed.text);
     const publicText = quotePayload?.displayText ?? composed.text.trim();
@@ -799,6 +998,11 @@ app.post('/api/agent/reply', async (req, res) => {
     let quoteFetched: Record<string, unknown> | undefined;
     let quoteError: string | undefined;
 
+    if (directQuote) {
+      quoteFetched = directQuote.quoteFetched;
+      quoteError = directQuote.quoteError;
+    }
+
     if (quotePayload && process.env.UNISWAP_API_KEY) {
       try {
         const swapper = quoteSwapperAddress(agent);
@@ -819,7 +1023,7 @@ app.post('/api/agent/reply', async (req, res) => {
         quoteFetched = q.quote as Record<string, unknown>;
 
         const pretty = await formatQuotePretty(
-          { tokenIn: quotePayload.intent.tokenIn, tokenOut: quotePayload.intent.tokenOut, amount: quotePayload.intent.amount },
+          { tokenIn: quotePayload.intent.tokenIn, tokenOut: quotePayload.intent.tokenOut, amount: quotePayload.intent.amount, chainId: quotePayload.intent.chainId },
           quoteFetched,
         );
 

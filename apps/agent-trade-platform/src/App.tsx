@@ -191,11 +191,7 @@ export function App() {
           A
         </div>
         <div className="nav-title-block">
-          <div className="nav-title">Messages</div>
-          <div className="nav-subtitle">
-            Agents · {cfg?.demo ? 'Demo' : 'AXL'}{cfg && !cfg.demo ? ' · poll 3s' : ''} ·{' '}
-            {cfg?.zeroGRouter ? 'Router' : '0G broker'}
-          </div>
+          <div className="nav-title">Pico</div>
         </div>
       </header>
 
@@ -209,26 +205,8 @@ export function App() {
             Bob <code>{cfg.bobPeerKeyPreview}</code>
           </span>
           <br />
-          <span>
-            Keys {cfg.alicePrivateKey ? '✓' : '—'} / {cfg.bobPrivateKey ? '✓' : '—'}
-          </span>
-          <span> · </span>
-          <span>
-            0G {cfg.aliceZeroG ? '✓' : '—'} / {cfg.bobZeroG ? '✓' : '—'}
-          </span>
-          <span> · </span>
-          <span>Uniswap {cfg.uniswapTradingApi ? '✓' : '—'}</span>
-          {cfg.demo === false && (
-            <>
-              <span> · </span>
-              <span title="Inbound human-tagged AXL messages run 0G on the recipient and send back automatically">
-                0G auto-reply {cfg.axlAutoReply ? 'on' : 'off'}
-              </span>
-            </>
-          )}
           {cfg.zeroGRouter && (
             <>
-              <span> · </span>
               <span>Model {cfg.routerChatModel ?? '—'}</span>
             </>
           )}
@@ -325,7 +303,7 @@ export function App() {
               </button>
             </>
           )}
-          <button disabled={busy} type="button" className="btn" onClick={() => void call('/api/axl/ingest')}>
+          {/* <button disabled={busy} type="button" className="btn" onClick={() => void call('/api/axl/ingest')}>
             Pull AXL now
           </button>
           <button
@@ -345,7 +323,7 @@ export function App() {
             onClick={() => void call('/api/agent/reply', { agent: 'bob', cue })}
           >
             LLM Bob→AXL
-          </button>
+          </button> */}
         </div>
       </nav>
     </div>
