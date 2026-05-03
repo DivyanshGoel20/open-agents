@@ -1,0 +1,309 @@
+/* Apple Messages–inspired: flat colors, WCAG-safe contrast */
+
+:root {
+  --ios-bg: #f2f2f7;
+  --ios-white: #ffffff;
+  --ios-blue: #007aff;
+  --ios-blue-pressed: #0062cc;
+  --ios-gray-bubble: #e9e9eb;
+  --ios-label-primary: #000000;
+  --ios-label-secondary: #636366;
+  --ios-label-tertiary: #8e8e93;
+  --ios-separator: rgba(60, 60, 67, 0.29);
+  --ios-nav-bg: rgba(249, 249, 249, 0.94);
+  --ios-system-card: #f5f5f7;
+  --ios-system-text: #1c1c1e;
+  --ios-code-bg: rgba(118, 118, 128, 0.12);
+  --ios-code-text: #1c1c1e;
+  --ios-sent-text: #ffffff;
+  --ios-received-text: #000000;
+  --ios-danger-bg: #ffebee;
+  --ios-danger-text: #b71c1c;
+  --ios-input-border: #c7c7cc;
+  --bubble-radius: 18px;
+  --bubble-tail-radius: 5px;
+  --font-stack:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', system-ui, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-stack);
+  background: var(--ios-bg);
+  color: var(--ios-label-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--ios-bg);
+}
+
+/* Navigation bar */
+.nav-bar {
+  flex-shrink: 0;
+  padding: 10px 16px 10px;
+  background: var(--ios-nav-bg);
+  border-bottom: 0.5px solid var(--ios-separator);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.nav-title-block {
+  flex: 1;
+  min-width: 0;
+}
+
+.nav-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ios-label-primary);
+}
+
+.nav-subtitle {
+  font-size: 12px;
+  color: var(--ios-label-secondary);
+  margin-top: 2px;
+}
+
+.nav-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--ios-blue);
+  color: var(--ios-sent-text);
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* Meta / status strip */
+.meta-strip {
+  flex-shrink: 0;
+  padding: 8px 16px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ios-label-secondary);
+  border-bottom: 0.5px solid var(--ios-separator);
+  background: var(--ios-bg);
+}
+
+.meta-strip code {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  color: var(--ios-code-text);
+  background: var(--ios-code-bg);
+  padding: 2px 5px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+/* Message list */
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 12px 100px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.message-list-empty {
+  text-align: center;
+  color: var(--ios-label-tertiary);
+  font-size: 15px;
+  margin-top: 56px;
+  padding: 0 24px;
+}
+
+.bubble-row {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  margin-bottom: 8px;
+}
+
+.bubble-row--sent {
+  align-items: flex-end;
+}
+
+.bubble-row--received {
+  align-items: flex-start;
+}
+
+.bubble-row--system {
+  align-items: center;
+}
+
+.bubble-name {
+  font-size: 11px;
+  color: var(--ios-label-tertiary);
+  margin-bottom: 4px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.bubble-row--sent .bubble-name {
+  text-align: right;
+  width: 100%;
+  max-width: 75%;
+}
+
+.bubble-row--received .bubble-name {
+  text-align: left;
+  width: 100%;
+  max-width: 75%;
+}
+
+.bubble {
+  max-width: 75%;
+  padding: 8px 14px;
+  border-radius: var(--bubble-radius);
+  font-size: 17px;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.bubble--sent {
+  background: var(--ios-blue);
+  color: var(--ios-sent-text);
+  border-bottom-right-radius: var(--bubble-tail-radius);
+}
+
+.bubble--received {
+  background: var(--ios-gray-bubble);
+  color: var(--ios-received-text);
+  border-bottom-left-radius: var(--bubble-tail-radius);
+}
+
+.bubble--system {
+  max-width: 90%;
+  background: var(--ios-system-card);
+  color: var(--ios-system-text);
+  border: 0.5px solid var(--ios-separator);
+  font-size: 14px;
+  text-align: center;
+  border-radius: 12px;
+}
+
+/* Composer */
+.composer {
+  flex-shrink: 0;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0));
+  background: var(--ios-nav-bg);
+  border-top: 0.5px solid var(--ios-separator);
+}
+
+.composer-input {
+  width: 100%;
+  border-radius: 20px;
+  border: 0.5px solid var(--ios-input-border);
+  padding: 10px 16px;
+  font-size: 16px;
+  font-family: inherit;
+  background: var(--ios-white);
+  color: var(--ios-label-primary);
+  margin-bottom: 10px;
+  outline: none;
+}
+
+.composer-input::placeholder {
+  color: var(--ios-label-tertiary);
+}
+
+.composer-input:focus {
+  border-color: var(--ios-blue);
+}
+
+.composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btn {
+  border-radius: 20px;
+  border: none;
+  padding: 8px 16px;
+  font-size: 15px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--ios-gray-bubble);
+  color: var(--ios-label-primary);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn:active:not(:disabled) {
+  opacity: 0.75;
+}
+
+.btn--primary {
+  background: var(--ios-blue);
+  color: var(--ios-sent-text);
+}
+
+.btn--primary:active:not(:disabled) {
+  background: var(--ios-blue-pressed);
+}
+
+.error-banner {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  font-size: 14px;
+  background: var(--ios-danger-bg);
+  color: var(--ios-danger-text);
+  border-top: 0.5px solid var(--ios-separator);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ios-bg: #000000;
+    --ios-white: #1c1c1e;
+    --ios-blue: #0a84ff;
+    --ios-blue-pressed: #409cff;
+    --ios-gray-bubble: #2c2c2e;
+    --ios-label-primary: #ffffff;
+    --ios-label-secondary: #98989d;
+    --ios-label-tertiary: #636366;
+    --ios-separator: rgba(84, 84, 88, 0.65);
+    --ios-nav-bg: rgba(28, 28, 30, 0.94);
+    --ios-system-card: #2c2c2e;
+    --ios-system-text: #ffffff;
+    --ios-code-bg: rgba(118, 118, 128, 0.24);
+    --ios-code-text: #ffffff;
+    --ios-sent-text: #ffffff;
+    --ios-received-text: #ffffff;
+    --ios-danger-bg: #3a1f1f;
+    --ios-danger-text: #ff8a80;
+    --ios-input-border: #48484a;
+  }
+}
